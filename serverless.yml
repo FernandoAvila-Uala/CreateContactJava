@@ -1,0 +1,242 @@
+service: contact-feravila
+provider:
+  name: aws
+  runtime: java11
+  stage: dev
+  region: us-east-1
+  logs:
+    restApi: true
+    level: INFO
+  iamRoleStatements:
+    - Effect: Allow
+      Action:
+        - dynamodb:GetRecords
+        - dynamodb:GetShardIterator
+        - dynamodb:DescribeStream
+        - dynamodb:ListStreams
+      Resource:
+        Fn::GetAtt: [ "ContactsFerAvilaTable", "Arn" ]
+    - Effect: Allow
+      Action:
+        - sns:Publish
+      Resource: "*"
+    - Effect: Allow
+      Action:
+        - logs:CreateLogGroup
+        - logs:CreateLogStream
+        - logs:PutLogEvents
+        - lambda:InvokeFunction
+      Resource: "*"
+    - Effect: Allow
+      Action:
+        - cognito-idp:AdminInitiateAuth
+        - cognito-idp:AdminCreateUser
+        - cognito-idp:AdminSetUserPassword
+      Resource: "*"
+
+frameworkVersion: '3'
+
+package:
+  artifact: 'build/distributions/ContactFernandoAvila-TEST.zip'
+
+functions:
+  createContact:
+    name: createContact
+    handler: org.ferdev.contactapp.handler.CreateContactHandler
+    role:
+      Fn::GetAtt: [ "ContactRole", "Arn" ]
+    events:
+      - http:
+          path: create-contact
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId:
+              Ref: ApiGatewayContactFerAvilaAuthorizer
+          method: post
+          response:
+            template: $input.path('$')
+            statusCode:
+              200:
+                pattern: ''
+              400:
+                pattern: '.*"code": 400,.*'
+                template:
+                  application/json: $input.path('$')
+                  application/xml: $input.path('$')
+              500:
+                pattern: '.*"code": 500,.*'
+                template:
+                  application/json: $input.path('$')
+                  application/xml: $input.path('$')
+  getContactById:
+    name: getContactById
+    handler: org.ferdev.contactapp.handler.GetContactByIdHandler
+    role:
+      Fn::GetAtt: [ "ContactRole", "Arn" ]
+    events:
+      - http:
+          path: get-contact/{id}
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId:
+              Ref: ApiGatewayContactFerAvilaAuthorizer
+          method: get
+          response:
+            template: $input.path('$')
+            statusCode:
+              200:
+                pattern: ''
+              404:
+                pattern: '.*"code": 404,.*'
+                template:
+                  application/json: $input.path('$')
+                  application/xml: $input.path('$')
+              500:
+                pattern: '.*"code": 500,.*'
+                template:
+                  application/json: $input.path('$')
+                  application/xml: $input.path('$')
+  updateContactById:
+    name: updateContactById
+    handler: org.ferdev.contactapp.handler.UpdateContactByIdHandler
+    role:
+      Fn::GetAtt: [ "ContactRole", "Arn" ]
+    events:
+      - http:
+          path: contact/{id}
+          method: put
+          response:
+            template: $input.path('$')
+            statusCode:
+              200:
+                pattern: ''
+              404:
+                pattern: '.*"code": 404,.*'
+                template:
+                  application/json: $input.path('$')
+                  application/xml: $input.path('$')
+              500:
+                pattern: '.*"code": 500,.*'
+                template:
+                  application/json: $input.path('$')
+                  application/xml: $input.path('$')
+  processContacts:
+    name: processContacts
+    handler: org.ferdev.contactapp.handler.ProcessContactsHandler
+    timeout: 20
+    role:
+      Fn::GetAtt: [ "ContactRole", "Arn" ]
+    events:
+      - stream:
+          type: dynamodb
+          arn: "arn:aws:dynamodb:us-east-1:620097380428:table/Contacts-FernandoAvila/stream/2023-09-01T18:10:52.854"
+  processSnsNotification:
+    name: processSnsNotification
+    handler: org.ferdev.contactapp.handler.ProcessSnsNotificationHandler
+    timeout: 20
+    role:
+      Fn::GetAtt: [ "ContactRole", "Arn" ]
+    events:
+      - sns:
+          topicName: "ContactFerAvilaSNSTopic"
+
+resources:
+  Resources:
+    ApiGatewayRestApi:
+      Type: AWS::ApiGateway::RestApi
+      Properties:
+        Name: ContactFerAvilApiGateway
+        FailOnWarnings: true
+    ContactRole:
+      Type: AWS::IAM::Role
+      Properties:
+        RoleName: ContactRole
+        AssumeRolePolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service:
+                  - lambda.amazonaws.com
+              Action:
+                - sts:AssumeRole
+        Policies:
+          - PolicyName: DynamoDBAccess
+            PolicyDocument:
+              Version: "2012-10-17"
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - dynamodb:PutItem
+                    - dynamodb:BatchWriteItem
+                    - dynamodb:GetItem
+                    - dynamodb:BatchGetItem
+                    - dynamodb:GetRecords
+                    - dynamodb:GetShardIterator
+                    - dynamodb:DescribeStream
+                    - dynamodb:ListStreams
+                    - dynamodb:UpdateItem
+                  Resource:
+                    - "arn:aws:dynamodb:us-east-1:620097380428:table/Contacts-FernandoAvila"
+                    - "arn:aws:dynamodb:us-east-1:620097380428:table/Contacts-FernandoAvila/stream/*"
+          - PolicyName: SNSPublishAccess
+            PolicyDocument:
+              Version: "2012-10-17"
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - sns:Publish
+                  Resource: "*"
+          - PolicyName: CloudWatchLogsAccess
+            PolicyDocument:
+              Version: "2012-10-17"
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - logs:CreateLogGroup
+                    - logs:CreateLogStream
+                    - logs:PutLogEvents
+                    - logs:GetLogEvents
+                    - logs:DescribeLogGroups
+                    - logs:FilterLogEvents
+                  Resource: "*"
+    ContactFerAvilaSNSTopic:
+      Type: AWS::SNS::Topic
+      Properties:
+        DisplayName: ContactFerAvilaSNSTopic.
+    ContactFerAvilaUP:
+      Type: AWS::Cognito::UserPool
+      Properties:
+        UserPoolName: ContactFerAvilaUP
+        Policies:
+          PasswordPolicy:
+            MinimumLength: 6
+            RequireLowercase: False
+            RequireNumbers: False
+            RequireSymbols: False
+            RequireUppercase: False
+        Schema:
+          - AttributeDataType: String
+            Name: email
+            Required: true
+          - AttributeDataType: String
+            Name: phone_number
+            Required: false
+    ContactFerAvilaUPC:
+      Type: AWS::Cognito::UserPoolClient
+      Properties:
+        ClientName: ContactFerAvilaUPC
+        GenerateSecret: false
+        UserPoolId: { Ref: ContactFerAvilaUP }
+        AccessTokenValidity: 6
+        IdTokenValidity: 6
+    ApiGatewayContactFerAvilaAuthorizer:
+      Type: AWS::ApiGateway::Authorizer
+      Properties:
+        Name: ApiGatewayContactFerAvilaAuthorizer
+        Type: COGNITO_USER_POOLS
+        IdentitySource: method.request.header.Authorization
+        RestApiId:
+          Ref: ApiGatewayRestApi
+        ProviderARNs:
+          - Fn::GetAtt: [ "ContactFerAvilaUP", "Arn" ]
